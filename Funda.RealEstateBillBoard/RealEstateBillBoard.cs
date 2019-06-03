@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -13,7 +13,7 @@ namespace Funda.RealEstateBillBoard
         private readonly AddressBuilder _addressBuilder;
         private readonly IPartnerService _partnerService;
         private readonly Settings _settings;
-        
+
         public RealEstateBillBoard(IPartnerService partnerService, AddressBuilder addressBuilder, Settings settings)
         {
             _partnerService = partnerService;
@@ -25,8 +25,9 @@ namespace Funda.RealEstateBillBoard
         {
             var maxPageSize = _settings.MaxPageSize;
             var maxPropertyCount = _settings.MaxPropertyCount;
-            var pageCount = (int)Math.Ceiling(maxPropertyCount * 1.0 / maxPageSize);
-
+            var pageCount = (int) Math.Ceiling(maxPropertyCount * 1.0 / maxPageSize);
+            
+            var billboard = new List<RealEstateAgent>();
             var tasks = new List<Task<ServiceResponse>>();
             for (var i = 1; i <= pageCount; i++)
             {
@@ -40,32 +41,41 @@ namespace Funda.RealEstateBillBoard
                     postUrl = _addressBuilder.GetUrl(i, 25, "amsterdam");
                 }
 
-                tasks.Add(_partnerService.Map(postUrl));
+                var response = await _partnerService.Map(postUrl);
                 Console.WriteLine($"Request send to : {postUrl} ");
 
-                if (i % 3 == 0)
+                if (response.Success)
                 {
-                    //3 task in max 2 sc.
-                    await Task.Delay(2000);
+                    billboard = _partnerService.Reduce(billboard, response.Dictionary);
+                }
+                else
+                {
+                    Console.WriteLine($"Warning : Not reduced, will be enqueued {response.PostUrl} ");
+                    await Task.Delay(15000);
+                    tasks.Add(_partnerService.Map(response.PostUrl));
                 }
             }
 
-            var billboard = new List<RealEstateAgent>();
             while (tasks.Any())
             {
+                Console.WriteLine($"Task count : {tasks.Count}");
+
+                await Task.Delay(_settings.RetryInMiliSeconds);
+
                 var finished = await Task.WhenAny(tasks);
                 tasks.Remove(finished);
                 var finishedCall = await finished;
+
                 Console.WriteLine($"Response : {finishedCall.PostUrl} ");
+
                 if (finishedCall.Success)
                 {
                     billboard = _partnerService.Reduce(billboard, finishedCall.Dictionary);
                 }
                 else
                 {
-                    Console.WriteLine($"Warning : Not reduced, will be enqueued {finishedCall.PostUrl} ");
-                    Thread.Sleep(_settings.RetryInMiliSeconds);
-                    tasks.Add(_partnerService.Map(finishedCall.PostUrl));
+                    Console.WriteLine($"Skipped :  {finishedCall.PostUrl} ");
+                    //throw new Exception("No more trying. :) ");
                 }
             }
 
